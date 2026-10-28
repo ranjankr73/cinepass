@@ -1,19 +1,34 @@
-import z from 'zod';
+import { z } from 'zod';
 
-export const nameSchema = z
-  .string()
+const nameSchema = z
+  .string({ error: 'Name is required' })
   .trim()
-  .min(1)
-  .max(50)
-  .refine((name) => name[0]?.toUpperCase() + name.substring(1));
-export const emailSchema = z.string().trim().min(1).max(50).toLowerCase().pipe(z.email());
-export const passwordSchema = z
-  .string()
-  .min(8)
-  .max(255)
-  .regex(/^[A-Z]/, 'Must contain uppercase')
-  .regex(/^[a-z]/)
-  .regex(/^[0-9]/);
+  .min(2, { error: 'Name must be at least 2 characters long' })
+  .transform((val) => {
+    return val.replace(/\b\w/g, (char) => char.toUpperCase());
+  });
+
+const emailSchema = z
+  .string({ error: 'Email is required' })
+  .trim()
+  .toLowerCase()
+  .max(254, { error: 'Email is too long' })
+  .pipe(z.email({ error: 'Please enter a valid email address' }));
+
+const passwordSchema = z
+  .string({ error: 'Password is required' })
+  .min(8, { error: 'Password must be at least 8 characters long' })
+  .max(72, { error: 'Password must be at most 72 characters long' })
+  .regex(/[A-Z]/, {
+    error: 'Password must contain at least one uppercase letter',
+  })
+  .regex(/[a-z]/, {
+    error: 'Password must contain at least one lowercase letter',
+  })
+  .regex(/[0-9]/, { error: 'Password must contain at least one number' })
+  .regex(/[^A-Za-z0-9]/, {
+    error: 'Password must contain at least one special character',
+  });
 
 export const registerSchema = z.object({
   name: nameSchema,
