@@ -1,0 +1,17 @@
+
+node_modules/
+dist/
+coverage/
+generated/
+.agents/
+.git/
+secrets/
+playwright-report/
+test-results/
+package-lock.json
+
+.env
+.env.*
+!.env.example
+
+*.log

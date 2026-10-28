@@ -1,0 +1,413 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------- Enums ----------
+
+enum Role {
+  USER
+  ADMIN
+  THEATRE_OWNER
+}
+
+enum UserStatus {
+  ACTIVE
+  BLOCKED
+}
+
+enum MovieStatus {
+  COMING_SOON
+  NOW_SHOWING
+  ARCHIVED
+}
+
+enum MovieCertificate {
+  U
+  UA
+  A
+  S
+}
+
+enum TheatreStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum ScreenType {
+  STANDARD
+  THREE_D
+  IMAX
+  FOUR_DX
+  DOLBY_ATMOS
+}
+
+enum ShowStatus {
+  SCHEDULED
+  CANCELLED
+  COMPLETED
+}
+
+enum SeatStatus {
+  AVAILABLE
+  LOCKED
+  BOOKED
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  EXPIRED
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum PaymentMethod {
+  CARD
+  UPI
+  NETBANKING
+  WALLET
+  EMI
+}
+
+enum RefundStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+// ---------- Users ----------
+
+model User {
+  id            Int        @id @default(autoincrement())
+  name          String
+  email         String     @unique
+  phone         String?    @unique
+  password      String
+  role          Role       @default(USER)
+  status        UserStatus @default(ACTIVE)
+  emailVerified Boolean    @default(false)
+  phoneVerified Boolean    @default(false)
+
+  theatres Theatre[]
+  bookings Booking[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([status])
+}
+
+// ---------- Catalogue ----------
+
+model Movie {
+  id          Int               @id @default(autoincrement())
+  title       String
+  description String
+  duration    Int // minutes
+  genre       String
+  language    String
+  releaseDate DateTime          @db.Date
+  poster      String
+  trailerUrl  String?
+  rating      Float? // 0-10
+  certificate MovieCertificate?
+  status      MovieStatus       @default(COMING_SOON)
+
+  shows Show[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([title])
+  @@index([status, releaseDate])
+  @@index([language])
+}
+
+model Theatre {
+  id        Int           @id @default(autoincrement())
+  name      String
+  address   String
+  city      String
+  state     String?
+  pincode   String?
+  latitude  Float?
+  longitude Float?
+  phone     String
+  email     String        @unique
+  ownerId   Int           @unique
+  status    TheatreStatus @default(INACTIVE)
+
+  screens Screen[]
+
+  owner User @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([city, status])
+  @@index([ownerId])
+}
+
+model Screen {
+  id         Int        @id @default(autoincrement())
+  name       String
+  theatreId  Int
+  screenType ScreenType @default(STANDARD)
+  totalSeats Int
+  isActive   Boolean    @default(true)
+
+  categories SeatCategory[]
+  seats      Seat[]
+  shows      Show[]
+
+  theatre Theatre @relation(fields: [theatreId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@unique([theatreId, name])
+  @@index([theatreId])
+}
+
+// ---------- Seat Layout ----------
+
+model SeatCategory {
+  id        Int     @id @default(autoincrement())
+  screenId  Int
+  name      String // Silver, Gold, Recliner etc.
+  basePrice Decimal @db.Decimal(10, 2)
+  isActive  Boolean @default(true)
+
+  seats       Seat[]
+  showPricing ShowPricing[]
+
+  screen Screen @relation(fields: [screenId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([screenId, name])
+  @@index([screenId])
+}
+
+model Seat {
+  id         Int     @id @default(autoincrement())
+  screenId   Int
+  categoryId Int
+  row        String // A, B, AA etc
+  number     Int // 1, 2, 3 etc
+  label      String // A1, B2, AA3 etc
+  isActive   Boolean @default(true)
+
+  showSeats    ShowSeat[]
+  bookingItems BookingItem[]
+
+  screen   Screen       @relation(fields: [screenId], references: [id], onDelete: Restrict)
+  category SeatCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([screenId, row, number])
+  @@unique([screenId, label])
+  @@index([screenId, categoryId])
+}
+
+// ---------- Shows ----------
+
+model Show {
+  id          Int        @id @default(autoincrement())
+  date        DateTime   @db.Date
+  startTime   DateTime   @db.Time()
+  movieId     Int
+  screenId    Int
+  status      ShowStatus @default(SCHEDULED)
+  language    String? // for dubbed versions (different from Movie.language)
+  cancelledAt DateTime?
+
+  pricing  ShowPricing[]
+  seats    ShowSeat[]
+  bookings Booking[]
+
+  movie  Movie  @relation(fields: [movieId], references: [id], onDelete: Restrict)
+  screen Screen @relation(fields: [screenId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@unique([screenId, date, startTime])
+  @@index([movieId, date, status])
+  @@index([screenId, date])
+  @@index([status, date])
+}
+
+// Per-show, per-category pricing. 
+// For weekend/evening surcharges without mutating category base price. 
+// If its entry is missing, fallback to SeatCategory.basePrice
+model ShowPricing {
+  id         Int     @id @default(autoincrement())
+  showId     Int
+  categoryId Int
+  price      Decimal @db.Decimal(10, 2)
+
+  show     Show         @relation(fields: [showId], references: [id], onDelete: Cascade)
+  category SeatCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  @@unique([showId, categoryId])
+  @@index([showId])
+}
+
+// One entry per physical seat per show - shows the current state of that seat
+// Generated in bulk when a show is created
+model ShowSeat {
+  id          Int        @id @default(autoincrement())
+  showId      Int
+  seatId      Int
+  status      SeatStatus @default(AVAILABLE)
+  price       Decimal    @db.Decimal(10, 2) // snapshot at time of show creation
+  lockedUntil DateTime?
+  lockedBy    Int? // userId who placed the hold
+  bookingId   Int? // current active booking
+
+  show    Show     @relation(fields: [showId], references: [id], onDelete: Cascade)
+  seat    Seat     @relation(fields: [seatId], references: [id], onDelete: Restrict)
+  booking Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([showId, seatId])
+  @@index([showId, status])
+  @@index([bookingId])
+  @@index([status, lockedUntil]) // for lock-expiry sweeper
+}
+
+// ---------- Bookings ----------
+
+model Booking {
+  id        Int           @id @default(autoincrement())
+  reference String        @unique // "BMS-8F3K2L9P" - human-readable, never expose the PK
+  showId    Int
+  userId    Int
+  status    BookingStatus @default(PENDING)
+
+  // Money - all in INR, all snapshotted at booking time
+  subtotal       Decimal @db.Decimal(10, 2) // sum of BookingItem.price
+  convenienceFee Decimal @default(0) @db.Decimal(10, 2)
+  taxes          Decimal @default(0) @db.Decimal(10, 2)
+  discount       Decimal @default(0) @db.Decimal(10, 2)
+  totalAmount    Decimal @db.Decimal(10, 2)
+
+  // Lifecycle
+  expiresAt   DateTime? // for PENDING - when the seat lock dies
+  confirmedAt DateTime?
+
+  // Cancellation / refund
+  cancelledAt  DateTime?
+  cancelledBy  Int?
+  cancelReason String?
+  refundAmount Decimal   @default(0) @db.Decimal(10, 2)
+  refundedAt   DateTime?
+
+  items    BookingItem[] // immutable history
+  seats    ShowSeat[] // only populated while booking is active
+  payments Payment[]
+  refunds  Refund[]
+
+  show Show @relation(fields: [showId], references: [id], onDelete: Restrict)
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([showId, status])
+  @@index([status, expiresAt]) // for expiry sweeper
+}
+
+// Immutable record of what was bought.
+// Survives cancellation so refund, support tickets, and analytics still work after ShowSeat is released
+model BookingItem {
+  id           Int     @id @default(autoincrement())
+  bookingId    Int
+  seatId       Int
+  seatLabel    String // survives seat layout changes
+  categoryName String // survives category renames
+  price        Decimal @db.Decimal(10, 2)
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  seat    Seat    @relation(fields: [seatId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+
+  @@unique([bookingId, seatId])
+  @@index([bookingId])
+  @@index([seatId])
+}
+
+// ---------- Payments & refunds ----------
+
+model Payment {
+  id               Int            @id @default(autoincrement())
+  bookingId        Int
+  amount           Decimal        @db.Decimal(10, 2)
+  currency         String         @default("INR")
+  method           PaymentMethod?
+  status           PaymentStatus  @default(PENDING)
+  gateway          String // razorpay, stripe, etc.
+  gatewayOrderId   String?
+  gatewayPaymentId String?        @unique
+  gatewaySignature String?
+  failureReason    String?
+  paidAt           DateTime?
+
+  refunds Refund[]
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([bookingId])
+  @@index([status])
+}
+
+model Refund {
+  id              Int          @id @default(autoincrement())
+  paymentId       Int
+  bookingId       Int
+  amount          Decimal      @db.Decimal(10, 2)
+  status          RefundStatus @default(PENDING)
+  reason          String?
+  gatewayRefundId String?      @unique
+  failureReason   String?
+  processedAt     DateTime?
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([bookingId])
+  @@index([paymentId])
+  @@index([status])
+}

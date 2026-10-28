@@ -1,0 +1,26 @@
+services:
+  app:
+    build:
+      target: development
+
+    command:
+      - sh
+      - -c
+      - npm run prisma:generate && npm run dev
+
+    ports:
+      - '3000:3000'
+
+    volumes:
+      - .:/app
+      - app_node_modules:/app/node_modules
+
+    healthcheck:
+      start_period: 40s
+
+  nginx:
+    ports:
+      - '8080:80'
+
+volumes:
+  app_node_modules:

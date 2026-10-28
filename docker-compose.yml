@@ -1,0 +1,134 @@
+name: cinepass
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    init: true
+    restart: unless-stopped
+
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: ${PORT:-3000}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-appdb}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@cache:6379
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+
+    expose:
+      - '${PORT:-3000}'
+
+    networks:
+      - app_net
+      - data_net
+
+    depends_on:
+      db:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'node -e fetch("http://127.0.0.1:" + (process.env.PORT || 3000) + "/health/live").then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))',
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+
+  migrate:
+    profiles: ['tools']
+
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: build
+
+    command: ['npx', 'prisma', 'migrate', 'deploy']
+
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-appdb}
+
+    networks:
+      - data_net
+
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-appdb}
+
+    volumes:
+      - db_data:/var/lib/postgresql
+
+    networks:
+      - data_net
+
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  cache:
+    image: redis:8-alpine
+    restart: unless-stopped
+
+    command:
+      [
+        'redis-server',
+        '--appendonly',
+        'yes',
+        '--requirepass',
+        '${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}',
+      ]
+
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+
+    volumes:
+      - cache_data:/data
+
+    networks:
+      - data_net
+
+    healthcheck:
+      test: ['CMD-SHELL', 'redis-cli --no-auth-warning -a "$${REDIS_PASSWORD}" ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  nginx:
+    image: nginx:1.30-alpine
+    restart: unless-stopped
+
+    networks:
+      - app_net
+
+    depends_on:
+      app:
+        condition: service_healthy
+
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+
+networks:
+  app_net:
+  data_net:
+    internal: true
+
+volumes:
+  db_data:
+  cache_data:

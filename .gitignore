@@ -1,0 +1,30 @@
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Generated Prisma client
+/generated/prisma/
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+secrets/
+
+# Test and coverage artifacts
+coverage/
+playwright-report/
+test-results/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Local editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

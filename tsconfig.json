@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+
+    "rootDir": ".",
+    "outDir": "./dist",
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+
+    "verbatimModuleSyntax": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+
+    "sourceMap": true,
+    "declaration": false,
+    "noEmitOnError": true,
+
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts", "generated/prisma/**/*.ts"],
+  "exclude": ["node_modules", "dist", "tests", "**/*.test.ts", "**/*.spec.ts"]
+}

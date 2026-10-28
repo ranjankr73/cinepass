@@ -1,0 +1,15 @@
+services:
+  app:
+    build:
+      target: production
+
+    ports: !reset []
+
+    volumes: !reset []
+
+    environment:
+      NODE_ENV: production
+
+  nginx:
+    ports:
+      - '80:80'
