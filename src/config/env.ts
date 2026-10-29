@@ -6,6 +6,11 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
   CORS_ORIGINS: z.string().default(''),
+  OTP_SECRET: z
+    .string({
+      error: 'OTP_SECRET is required in the environment variables',
+    })
+    .min(32, { message: 'OTP_SECRET must be at least 32 characters long' }),
 });
 
 const result = envSchema.safeParse(process.env);
