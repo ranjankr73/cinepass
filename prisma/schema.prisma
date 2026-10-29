@@ -7,25 +7,58 @@ datasource db {
   provider = "postgresql"
 }
 
-// ---------- Enums ----------
+// -----------------------------------
+//                 ENUMS 
+// -----------------------------------
 
+// -------- Identity & Access --------
+
+// Platform-wide role of a user account.
+// USER          - default customer
+// ADMIN         - internal staff / back-office
+// THEATRE_OWNER - granted only via an APPROVED RoleRequest
 enum Role {
   USER
   ADMIN
   THEATRE_OWNER
 }
 
+// Account lifecycle state. Blocking is preferred over hard deletion.
 enum UserStatus {
   ACTIVE
   BLOCKED
 }
 
+// Purpose of a one-time verification token.
+// EMAIL_VERIFY   - confirm email ownership
+// PASSWORD_RESET - password reset flow
+// PHONE_OTP      - phone OTP login/verification
+enum VerificationTokenType {
+  EMAIL_VERIFY
+  PASSWORD_RESET
+  PHONE_OTP
+}
+
+// Review state of a request to become a THEATRE_OWNER.
+enum RoleRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// -------- Catalogue --------
+
+// Visibility state of a movie in the catalogue.
+// COMING_SOON - announced / advance booking
+// NOW_SHOWING - currently bookable
+// ARCHIVED    - no longer listed
 enum MovieStatus {
   COMING_SOON
   NOW_SHOWING
   ARCHIVED
 }
 
+// Indian CBFC certification ratings.
 enum MovieCertificate {
   U
   UA
@@ -33,11 +66,14 @@ enum MovieCertificate {
   S
 }
 
+// Operating state of a theatre.
+// INACTIVE is the default (onboarding / paused).
 enum TheatreStatus {
   ACTIVE
   INACTIVE
 }
 
+// Projection / audio format of a screen.
 enum ScreenType {
   STANDARD
   THREE_D
@@ -46,18 +82,31 @@ enum ScreenType {
   DOLBY_ATMOS
 }
 
+// ---------- Shows & Seat Availability ----------
+
+// Lifecycle of a scheduled show.
+// COMPLETED is a terminal state for reporting/archival.
 enum ShowStatus {
   SCHEDULED
   CANCELLED
   COMPLETED
 }
 
+// Per-seat state for a given show.
+// LOCKED = temporary hold during checkout (see ShowSeat.lockedUntil).
 enum SeatStatus {
   AVAILABLE
   LOCKED
   BOOKED
 }
 
+// ---------- Bookings ----------
+
+// Lifecycle of a booking.
+// PENDING   - seats locked, awaiting payment
+// CONFIRMED - paid and seats booked
+// CANCELLED - user/system cancelled
+// EXPIRED   - payment window elapsed / lock died
 enum BookingStatus {
   PENDING
   CONFIRMED
@@ -65,6 +114,9 @@ enum BookingStatus {
   EXPIRED
 }
 
+// ---------- Payments & Refunds ----------
+
+// State of a payment attempt against a booking.
 enum PaymentStatus {
   PENDING
   SUCCESS
@@ -73,6 +125,7 @@ enum PaymentStatus {
   PARTIALLY_REFUNDED
 }
 
+// Supported payment instruments.
 enum PaymentMethod {
   CARD
   UPI
@@ -81,6 +134,7 @@ enum PaymentMethod {
   EMI
 }
 
+// State of a refund against a payment.
 enum RefundStatus {
   PENDING
   PROCESSING
@@ -88,31 +142,133 @@ enum RefundStatus {
   FAILED
 }
 
-// ---------- Users ----------
+// -----------------------------------
+//                 ENUMS 
+// -----------------------------------
 
+// -------- Identity & Access --------
+
+// A platform user. Customers, theatre owners, and admins share one table,
+// distinguished by `role`. Soft-deleted via `deletedAt`.
 model User {
   id            Int        @id @default(autoincrement())
   name          String
-  email         String     @unique
-  phone         String?    @unique
-  password      String
+  email         String     @unique // primary login identity
+  phone         String?    @unique // optional secondary identity
+  password      String // hashed, never plaintext
   role          Role       @default(USER)
-  status        UserStatus @default(ACTIVE)
+  status        UserStatus @default(ACTIVE) // BLOCKED denies login/actions
   emailVerified Boolean    @default(false)
   phoneVerified Boolean    @default(false)
+  lastLoginAt   DateTime?
 
-  theatres Theatre[]
-  bookings Booking[]
+  // Relations
+  sessions      Session[]
+  verifications VerificationToken[]
+  roleRequests  RoleRequest[]       @relation("RoleRequestUser")
+  theatres      Theatre[] // only meaningful for THEATRE_OWNER
+  bookings      Booking[]
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
+  deletedAt DateTime? // soft delete
 
   @@index([status])
 }
 
+// A refresh-token session. Tokens are rotated; `familyId` ties a rotation
+// chain together so token-reuse can be detected and the family revoked.
+model Session {
+  id          Int       @id @default(autoincrement())
+  userId      Int
+  refreshHash String    @unique // hash of the current refresh token
+  familyId    String // rotation family (reuse detection)
+  userAgent   String?
+  ip          String?
+  expiresAt   DateTime
+  revokedAt   DateTime? // set on logout / reuse detection
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([familyId])
+}
+
+// A one-time token for email verification, password reset, or phone OTP.
+// Stored hashed; `attempts` caps brute-force retries.
+model VerificationToken {
+  id         Int                   @id @default(autoincrement())
+  userId     Int
+  type       VerificationTokenType
+  tokenHash  String                @unique
+  expiresAt  DateTime
+  consumedAt DateTime? // set once used
+  attempts   Int                   @default(0)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, type])
+  @@index([expiresAt])
+}
+
+// Append-only log of login attempts, used for rate limiting and
+// threat detection (per email and per IP).
+model LoginAttempt {
+  id      BigInt  @id @default(autoincrement())
+  email   String
+  ip      String
+  success Boolean
+
+  createdAt DateTime @default(now())
+
+  @@index([email, createdAt])
+  @@index([ip, createdAt])
+}
+
+// Append-only audit trail for security- and business-relevant events.
+// `userId` is nullable to allow system-generated events.
+model AuditLog {
+  id        BigInt  @id @default(autoincrement())
+  userId    Int?
+  event     String // e.g. "user.login", "booking.cancelled"
+  ip        String?
+  userAgent String?
+  meta      Json? // arbitrary event payload
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([event, createdAt])
+}
+
+// A user's request to be promoted to a specific role (currently
+// THEATRE_OWNER). `details` holds deferred KYC fields.
+model RoleRequest {
+  id            Int               @id @default(autoincrement())
+  userId        Int
+  requestedRole Role // THEATRE_OWNER
+  status        RoleRequestStatus @default(PENDING)
+  details       Json? // KYC fields, deferred
+  reviewedBy    Int? // admin user id
+  reviewedAt    DateTime?
+  reason        String? // rejection / review note
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  user User @relation("RoleRequestUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([userId])
+}
+
 // ---------- Catalogue ----------
 
+// A movie title in the catalogue. Soft-deleted via `deletedAt`.
 model Movie {
   id          Int               @id @default(autoincrement())
   title       String
@@ -120,8 +276,8 @@ model Movie {
   duration    Int // minutes
   genre       String
   language    String
-  releaseDate DateTime          @db.Date
-  poster      String
+  releaseDate DateTime          @db.Date // date only, no time component
+  poster      String // poster URL
   trailerUrl  String?
   rating      Float? // 0-10
   certificate MovieCertificate?
@@ -138,6 +294,8 @@ model Movie {
   @@index([language])
 }
 
+// A physical cinema owned by a THEATRE_OWNER.
+// NOTE: `ownerId` is @unique -> one theatre per owner account.
 model Theatre {
   id        Int           @id @default(autoincrement())
   name      String
@@ -149,7 +307,7 @@ model Theatre {
   longitude Float?
   phone     String
   email     String        @unique
-  ownerId   Int           @unique
+  ownerId   Int           @unique // 1:1 with User (THEATRE_OWNER)
   status    TheatreStatus @default(INACTIVE)
 
   screens Screen[]
@@ -158,19 +316,20 @@ model Theatre {
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
+  deletedAt DateTime? // soft delete
 
   @@index([city, status])
   @@index([ownerId])
 }
 
+// An auditorium inside a theatre. Name is unique per theatre.
 model Screen {
   id         Int        @id @default(autoincrement())
-  name       String
+  name       String // e.g. "Screen 1", "Audi 3"
   theatreId  Int
   screenType ScreenType @default(STANDARD)
-  totalSeats Int
-  isActive   Boolean    @default(true)
+  totalSeats Int // denormalized count of physical seats
+  isActive   Boolean    @default(true) // soft pause without delete
 
   categories SeatCategory[]
   seats      Seat[]
@@ -180,7 +339,7 @@ model Screen {
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
+  deletedAt DateTime? // soft delete
 
   @@unique([theatreId, name])
   @@index([theatreId])
@@ -188,6 +347,8 @@ model Screen {
 
 // ---------- Seat Layout ----------
 
+// A pricing tier within a screen (Silver, Gold, Recliner, ...).
+// `basePrice` is the default; per-show overrides live in ShowPricing.
 model SeatCategory {
   id        Int     @id @default(autoincrement())
   screenId  Int
@@ -207,6 +368,8 @@ model SeatCategory {
   @@index([screenId])
 }
 
+// A single physical seat in a screen's layout.
+// `label` is the human-readable identifier (A1, B2, AA3 ...).
 model Seat {
   id         Int     @id @default(autoincrement())
   screenId   Int
@@ -214,7 +377,7 @@ model Seat {
   row        String // A, B, AA etc
   number     Int // 1, 2, 3 etc
   label      String // A1, B2, AA3 etc
-  isActive   Boolean @default(true)
+  isActive   Boolean @default(true) // disable a broken/removed seat
 
   showSeats    ShowSeat[]
   bookingItems BookingItem[]
@@ -232,6 +395,8 @@ model Seat {
 
 // ---------- Shows ----------
 
+// A single screening of a movie on a screen at a specific date/time.
+// `language` optionally overrides Movie.language (e.g. dubbed versions).
 model Show {
   id          Int        @id @default(autoincrement())
   date        DateTime   @db.Date
@@ -243,7 +408,7 @@ model Show {
   cancelledAt DateTime?
 
   pricing  ShowPricing[]
-  seats    ShowSeat[]
+  seats    ShowSeat[] // materialized per-seat availability
   bookings Booking[]
 
   movie  Movie  @relation(fields: [movieId], references: [id], onDelete: Restrict)
@@ -251,17 +416,17 @@ model Show {
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
+  deletedAt DateTime? // soft delete
 
-  @@unique([screenId, date, startTime])
+  @@unique([screenId, date, startTime]) // no overlapping slots on a screen
   @@index([movieId, date, status])
   @@index([screenId, date])
   @@index([status, date])
 }
 
-// Per-show, per-category pricing. 
-// For weekend/evening surcharges without mutating category base price. 
-// If its entry is missing, fallback to SeatCategory.basePrice
+// Per-show, per-category price override (weekend/evening surcharges, etc.)
+// without mutating SeatCategory.basePrice.
+// If no entry exists for a category, fall back to SeatCategory.basePrice.
 model ShowPricing {
   id         Int     @id @default(autoincrement())
   showId     Int
@@ -283,9 +448,9 @@ model ShowSeat {
   seatId      Int
   status      SeatStatus @default(AVAILABLE)
   price       Decimal    @db.Decimal(10, 2) // snapshot at time of show creation
-  lockedUntil DateTime?
+  lockedUntil DateTime? // when a LOCKED hold expires
   lockedBy    Int? // userId who placed the hold
-  bookingId   Int? // current active booking
+  bookingId   Int? // current active booking (null when released)
 
   show    Show     @relation(fields: [showId], references: [id], onDelete: Cascade)
   seat    Seat     @relation(fields: [seatId], references: [id], onDelete: Restrict)
@@ -302,6 +467,10 @@ model ShowSeat {
 
 // ---------- Bookings ----------
 
+// A customer's purchase for a show.
+// `reference` is the public, human-readable id ("BMS-8F3K2L9P");
+// never expose the numeric PK.
+// Money fields are snapshotted at booking time (all INR).
 model Booking {
   id        Int           @id @default(autoincrement())
   reference String        @unique // "BMS-8F3K2L9P" - human-readable, never expose the PK
@@ -322,7 +491,7 @@ model Booking {
 
   // Cancellation / refund
   cancelledAt  DateTime?
-  cancelledBy  Int?
+  cancelledBy  Int? // userId or admin id
   cancelReason String?
   refundAmount Decimal   @default(0) @db.Decimal(10, 2)
   refundedAt   DateTime?
@@ -344,7 +513,8 @@ model Booking {
 }
 
 // Immutable record of what was bought.
-// Survives cancellation so refund, support tickets, and analytics still work after ShowSeat is released
+// Survives cancellation so refunds, support tickets, and analytics still work
+// after ShowSeat is released. Seat label/category are denormalized snapshots.
 model BookingItem {
   id           Int     @id @default(autoincrement())
   bookingId    Int
@@ -365,6 +535,8 @@ model BookingItem {
 
 // ---------- Payments & refunds ----------
 
+// A payment attempt against a booking. Gateway identifiers are stored
+// for reconciliation; `gatewayPaymentId` is the idempotency key.
 model Payment {
   id               Int            @id @default(autoincrement())
   bookingId        Int
@@ -374,8 +546,8 @@ model Payment {
   status           PaymentStatus  @default(PENDING)
   gateway          String // razorpay, stripe, etc.
   gatewayOrderId   String?
-  gatewayPaymentId String?        @unique
-  gatewaySignature String?
+  gatewayPaymentId String?        @unique // gateway-side payment id
+  gatewaySignature String? // signature verification payload
   failureReason    String?
   paidAt           DateTime?
 
@@ -390,6 +562,8 @@ model Payment {
   @@index([status])
 }
 
+// A refund issued against a Payment. `gatewayRefundId` tracks the
+// gateway-side refund for reconciliation.
 model Refund {
   id              Int          @id @default(autoincrement())
   paymentId       Int
